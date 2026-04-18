@@ -16,6 +16,8 @@ from django.conf import settings
 
 def get_redis():
     """Return a Redis connection using settings."""
+    if hasattr(settings, 'REDIS_URL') and settings.REDIS_URL:
+        return redis.from_url(settings.REDIS_URL, decode_responses=True)
     return redis.Redis(
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
