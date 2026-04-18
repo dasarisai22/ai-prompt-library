@@ -1,0 +1,40 @@
+import { Injectable } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Observable } from 'rxjs';
+import { Prompt, CreatePromptDto } from '../models/prompt.model';
+import { environment } from '../../environments/environment';
+
+@Injectable({
+  providedIn: 'root',
+})
+export class PromptService {
+  private baseUrl = `${environment.apiUrl}/prompts`;
+
+  constructor(private http: HttpClient) {}
+
+  /** GET /prompts/?tag=xxx – fetch all (optionally filtered by tag) */
+  getPrompts(tag?: string): Observable<Prompt[]> {
+    const url = tag ? `${this.baseUrl}/?tag=${encodeURIComponent(tag)}` : `${this.baseUrl}/`;
+    return this.http.get<Prompt[]>(url, { withCredentials: true });
+  }
+
+  /** GET /prompts/<id>/ – increments Redis view counter */
+  getPrompt(id: number): Observable<Prompt> {
+    return this.http.get<Prompt>(`${this.baseUrl}/${id}/`, { withCredentials: true });
+  }
+
+  /** POST /prompts/ – create a new prompt (requires login) */
+  createPrompt(data: CreatePromptDto): Observable<Prompt> {
+    return this.http.post<Prompt>(`${this.baseUrl}/`, data, { withCredentials: true });
+  }
+
+  /** PUT /prompts/<id>/ – update (requires login + author) */
+  updatePrompt(id: number, data: CreatePromptDto): Observable<Prompt> {
+    return this.http.put<Prompt>(`${this.baseUrl}/${id}/`, data, { withCredentials: true });
+  }
+
+  /** DELETE /prompts/<id>/ – delete (requires login + author) */
+  deletePrompt(id: number): Observable<any> {
+    return this.http.delete(`${this.baseUrl}/${id}/`, { withCredentials: true });
+  }
+}

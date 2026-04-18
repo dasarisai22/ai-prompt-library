@@ -1,0 +1,74 @@
+# ── Docker Compose ─────────────────────────────────────────────────────────────
+# Orchestrates all 4 services: backend, frontend, postgres, redis
+# Run with: docker-compose up --build
+
+version: "3.9"
+
+services:
+  # ── PostgreSQL Database ──────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: apl-postgres
+    environment:
+      POSTGRES_DB: ai_prompt_library
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis Cache ──────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: apl-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ── Django Backend ───────────────────────────────────────────────────────
+  backend:
+    build: ./backend
+    container_name: apl-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=True
+      - POSTGRES_DB=ai_prompt_library
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app    # Live reload during development
+
+  # ── Angular Frontend ─────────────────────────────────────────────────────
+  frontend:
+    build: ./frontend
+    container_name: apl-frontend
+    ports:
+      - "4200:4200"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules   # Keep node_modules from the image, don't overwrite
+
+volumes:
+  postgres_data:
