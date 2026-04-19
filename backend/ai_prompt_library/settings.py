@@ -46,13 +46,17 @@ CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True   # Required for session cookies to be sent cross-origin
 
 # Trust these origins for CSRF (POST/PUT/DELETE requests)
-CSRF_TRUSTED_ORIGINS = [
+# Filter out empty strings - Django 4.0+ requires all values to start with http:// or https://
+_trusted = [
     'http://localhost:4200',
     'http://127.0.0.1:4200',
     'https://*.onrender.com',
-    'https://*.vercel.app',           # All Vercel preview deployments
-    os.environ.get('FRONTEND_URL', ''),  # Set this in Render env vars if custom domain
+    'https://*.vercel.app',
 ]
+_frontend_url = os.environ.get('FRONTEND_URL', '')
+if _frontend_url:
+    _trusted.append(_frontend_url)
+CSRF_TRUSTED_ORIGINS = _trusted
 
 # ── Session Cookies (CRITICAL for cross-origin login) ─────────────────────────
 # Cookies MUST be SameSite=None + Secure=True to work across different domains
