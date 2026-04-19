@@ -40,11 +40,26 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-# Allow any domain to talk to our API (for the assignment ease)
-# In production we would restrict this to the frontend URL
+# ── CORS & CSRF ────────────────────────────────────────────────────────────────
+# Allow all origins (needed so Vercel frontend can reach Render backend)
 CORS_ALLOW_ALL_ORIGINS = True
-CORS_ALLOW_CREDENTIALS = True
-CSRF_TRUSTED_ORIGINS = ['http://localhost:4200', 'https://*.onrender.com']
+CORS_ALLOW_CREDENTIALS = True   # Required for session cookies to be sent cross-origin
+
+# Trust these origins for CSRF (POST/PUT/DELETE requests)
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:4200',
+    'http://127.0.0.1:4200',
+    'https://*.onrender.com',
+    'https://*.vercel.app',           # All Vercel preview deployments
+    os.environ.get('FRONTEND_URL', ''),  # Set this in Render env vars if custom domain
+]
+
+# ── Session Cookies (CRITICAL for cross-origin login) ─────────────────────────
+# Cookies MUST be SameSite=None + Secure=True to work across different domains
+SESSION_COOKIE_SAMESITE = 'None'
+SESSION_COOKIE_SECURE = True     # Only sent over HTTPS (both Vercel & Render use HTTPS)
+CSRF_COOKIE_SAMESITE = 'None'
+CSRF_COOKIE_SECURE = True
 
 # Render configuration - respect X-Forwarded-Proto header
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
@@ -79,6 +94,9 @@ if os.environ.get('POSTGRES_HOST'):
             'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'postgres'),
             'HOST': os.environ.get('POSTGRES_HOST', 'localhost'),
             'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+            'OPTIONS': {
+                'sslmode': 'require',   # Neon requires SSL
+            },
         }
     }
 else:
@@ -108,18 +126,5 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-# CORS settings - allow Angular dev server
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:4200",
-    "http://127.0.0.1:4200",
-    "http://frontend:4200",
-]
-CORS_ALLOW_ALL_ORIGINS = True  # For development; restrict in production
-
-# Allow CSRF for POST requests from Angular
-CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:4200",
-    "http://127.0.0.1:4200",
-]
