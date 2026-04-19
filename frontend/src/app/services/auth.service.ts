@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { BehaviorSubject, Observable, tap, shareReplay } from 'rxjs';
+import { HttpClient, HttpHeaders } from '@angular/common/http';
+import { BehaviorSubject, Observable, tap } from 'rxjs';
 import { environment } from '../../environments/environment';
 
 export interface AuthStatus {
@@ -13,53 +13,84 @@ export interface AuthStatus {
 })
 export class AuthService {
   private authUrl = `${environment.apiUrl}/auth`;
+  private TOKEN_KEY = 'auth_token';
+  private USERNAME_KEY = 'auth_username';
 
-  // null = not yet fetched, object = result known
-  private authStatusSubject = new BehaviorSubject<AuthStatus | null>(null);
+  private authStatusSubject = new BehaviorSubject<AuthStatus>(
+    this.getStoredStatus()
+  );
   authStatus$ = this.authStatusSubject.asObservable();
 
-  // Shared observable — prevents duplicate HTTP calls on app load
-  private statusCheck$: Observable<AuthStatus>;
+  constructor(private http: HttpClient) {}
 
-  constructor(private http: HttpClient) {
-    this.statusCheck$ = this.http
-      .get<AuthStatus>(`${this.authUrl}/status/`, { withCredentials: true })
-      .pipe(
-        tap(status => this.authStatusSubject.next(status)),
-        shareReplay(1)
-      );
-
-    // Kick off status check immediately when service is created
-    this.statusCheck$.subscribe();
+  /** Read stored token status from localStorage (works across page reloads) */
+  private getStoredStatus(): AuthStatus {
+    const token = localStorage.getItem(this.TOKEN_KEY);
+    const username = localStorage.getItem(this.USERNAME_KEY);
+    return token ? { authenticated: true, username: username || '' } : { authenticated: false };
   }
 
-  /** Returns the real server status (waits for HTTP response) */
+  /** Returns the Authorization header for all API requests */
+  getAuthHeaders(): HttpHeaders {
+    const token = localStorage.getItem(this.TOKEN_KEY);
+    return token
+      ? new HttpHeaders({ 'Authorization': `Token ${token}` })
+      : new HttpHeaders();
+  }
+
+  /** Store token and username after login/signup */
+  private storeAuth(token: string, username: string): void {
+    localStorage.setItem(this.TOKEN_KEY, token);
+    localStorage.setItem(this.USERNAME_KEY, username);
+    this.authStatusSubject.next({ authenticated: true, username });
+  }
+
+  /** Remove token on logout */
+  private clearAuth(): void {
+    localStorage.removeItem(this.TOKEN_KEY);
+    localStorage.removeItem(this.USERNAME_KEY);
+    this.authStatusSubject.next({ authenticated: false });
+  }
+
+  /** Check auth status from server */
   checkStatus(): Observable<AuthStatus> {
-    return this.http.get<AuthStatus>(`${this.authUrl}/status/`, { withCredentials: true }).pipe(
+    return this.http.get<AuthStatus>(`${this.authUrl}/status/`, {
+      headers: this.getAuthHeaders()
+    }).pipe(
       tap(status => this.authStatusSubject.next(status))
     );
   }
 
   signup(data: any): Observable<any> {
-    return this.http.post(`${this.authUrl}/signup/`, data, { withCredentials: true }).pipe(
-      tap(() => this.checkStatus().subscribe())
+    return this.http.post<any>(`${this.authUrl}/signup/`, data).pipe(
+      tap(res => {
+        if (res.token) {
+          this.storeAuth(res.token, res.username);
+        }
+      })
     );
   }
 
   login(credentials: any): Observable<any> {
-    return this.http.post(`${this.authUrl}/login/`, credentials, { withCredentials: true }).pipe(
-      tap(() => this.checkStatus().subscribe())
+    return this.http.post<any>(`${this.authUrl}/login/`, credentials).pipe(
+      tap(res => {
+        if (res.token) {
+          this.storeAuth(res.token, res.username);
+        }
+      })
     );
   }
 
   logout(): Observable<any> {
-    return this.http.post(`${this.authUrl}/logout/`, {}, { withCredentials: true }).pipe(
-      tap(() => this.authStatusSubject.next({ authenticated: false }))
+    return this.http.post(`${this.authUrl}/logout/`, {}, {
+      headers: this.getAuthHeaders()
+    }).pipe(
+      tap(() => this.clearAuth())
     );
   }
 
-  /** Get current known status synchronously (may be null if not loaded yet) */
-  get currentStatus(): AuthStatus | null {
+  /** Get current known status synchronously */
+  get currentStatus(): AuthStatus {
     return this.authStatusSubject.getValue();
   }
 }

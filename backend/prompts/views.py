@@ -5,8 +5,9 @@ from django.http import JsonResponse
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
+from rest_framework.authtoken.models import Token
 
 from .models import Prompt, Tag
 from django.conf import settings
@@ -23,6 +24,21 @@ def get_redis():
         port=settings.REDIS_PORT,
         decode_responses=True,
     )
+
+
+# ─── Token Auth Helper ────────────────────────────────────────────────────────
+
+def get_user_from_request(request):
+    """Extract user from Authorization: Token <token> header."""
+    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+    if auth_header.startswith('Token '):
+        token_key = auth_header.split(' ', 1)[1].strip()
+        try:
+            token = Token.objects.select_related('user').get(key=token_key)
+            return token.user
+        except Token.DoesNotExist:
+            return None
+    return None
 
 
 # ─── Helper ───────────────────────────────────────────────────────────────────
@@ -77,27 +93,31 @@ def validate_prompt_data(data):
 @method_decorator(csrf_exempt, name='dispatch')
 class PromptListView(View):
     def get(self, request):
-        if not request.user.is_authenticated:
+        user = get_user_from_request(request)
+        if not user:
             return JsonResponse({"error": "Authentication required."}, status=401)
 
-        # Show all prompts (shared library)
         prompts = Prompt.objects.all().prefetch_related('tags')
-        
+
         tag_filter = request.GET.get('tag')
         if tag_filter:
             prompts = prompts.filter(tags__name__iexact=tag_filter)
-            
-        r = get_redis()
-        result = []
-        for prompt in prompts:
-            count = r.get(f"prompt:{prompt.id}:views")
-            view_count = int(count) if count else 0
-            result.append(prompt_to_dict(prompt, view_count))
+
+        try:
+            r = get_redis()
+            result = []
+            for prompt in prompts:
+                count = r.get(f"prompt:{prompt.id}:views")
+                view_count = int(count) if count else 0
+                result.append(prompt_to_dict(prompt, view_count))
+        except Exception:
+            result = [prompt_to_dict(p) for p in prompts]
 
         return JsonResponse(result, safe=False, status=200)
 
     def post(self, request):
-        if not request.user.is_authenticated:
+        user = get_user_from_request(request)
+        if not user:
             return JsonResponse({"error": "Authentication required."}, status=401)
 
         try:
@@ -113,7 +133,7 @@ class PromptListView(View):
             title=cleaned["title"],
             content=cleaned["content"],
             complexity=cleaned["complexity"],
-            author=request.user
+            author=user
         )
 
         for tag_name in cleaned["tags"]:
@@ -128,7 +148,8 @@ class PromptListView(View):
 @method_decorator(csrf_exempt, name='dispatch')
 class PromptDetailView(View):
     def get(self, request, pk):
-        if not request.user.is_authenticated:
+        user = get_user_from_request(request)
+        if not user:
             return JsonResponse({"error": "Authentication required."}, status=401)
 
         try:
@@ -136,21 +157,25 @@ class PromptDetailView(View):
         except Prompt.DoesNotExist:
             return JsonResponse({"error": "Not found."}, status=404)
 
-        r = get_redis()
-        view_count = r.incr(f"prompt:{prompt.id}:views")
+        try:
+            r = get_redis()
+            view_count = r.incr(f"prompt:{prompt.id}:views")
+        except Exception:
+            view_count = 0
 
         return JsonResponse(prompt_to_dict(prompt, view_count), status=200)
 
     def put(self, request, pk):
-        if not request.user.is_authenticated:
+        user = get_user_from_request(request)
+        if not user:
             return JsonResponse({"error": "Authentication required."}, status=401)
 
         try:
             prompt = Prompt.objects.get(pk=pk)
         except Prompt.DoesNotExist:
             return JsonResponse({"error": "Not found."}, status=404)
-            
-        if prompt.author and prompt.author != request.user:
+
+        if prompt.author and prompt.author != user:
             return JsonResponse({"error": "Permission denied."}, status=403)
 
         try:
@@ -174,32 +199,39 @@ class PromptDetailView(View):
                 tag, _ = Tag.objects.get_or_create(name=tag_name)
                 prompt.tags.add(tag)
 
-        r = get_redis()
-        count = r.get(f"prompt:{prompt.id}:views")
-        view_count = int(count) if count else 0
+        try:
+            r = get_redis()
+            count = r.get(f"prompt:{prompt.id}:views")
+            view_count = int(count) if count else 0
+        except Exception:
+            view_count = 0
 
         return JsonResponse(prompt_to_dict(prompt, view_count), status=200)
 
     def delete(self, request, pk):
-        if not request.user.is_authenticated:
+        user = get_user_from_request(request)
+        if not user:
             return JsonResponse({"error": "Authentication required."}, status=401)
 
         try:
             prompt = Prompt.objects.get(pk=pk)
         except Prompt.DoesNotExist:
             return JsonResponse({"error": "Not found."}, status=404)
-            
-        if prompt.author and prompt.author != request.user:
+
+        if prompt.author and prompt.author != user:
             return JsonResponse({"error": "Permission denied."}, status=403)
 
-        r = get_redis()
-        r.delete(f"prompt:{prompt.id}:views")
+        try:
+            r = get_redis()
+            r.delete(f"prompt:{prompt.id}:views")
+        except Exception:
+            pass
 
         prompt.delete()
-        return JsonResponse({"success": True}, status=204)
+        return JsonResponse({"success": True}, status=200)
 
 
-# ─── Auth Views ───────────────────────────────────────────────────────────────
+# ─── Auth Views (Token-based) ─────────────────────────────────────────────────
 
 @method_decorator(csrf_exempt, name='dispatch')
 class LoginView(View):
@@ -208,17 +240,18 @@ class LoginView(View):
             data = json.loads(request.body)
         except json.JSONDecodeError:
             return JsonResponse({"error": "Invalid JSON."}, status=400)
-            
+
         username = data.get("username", "").strip()
         password = data.get("password", "")
-        
+
         if not username or not password:
             return JsonResponse({"error": "Username and password are required."}, status=400)
 
         user = authenticate(request, username=username, password=password)
         if user is not None:
-            login(request, user)
-            return JsonResponse({"success": True, "username": user.username})
+            # Get or create a permanent token for this user
+            token, _ = Token.objects.get_or_create(user=user)
+            return JsonResponse({"success": True, "username": user.username, "token": token.key})
         else:
             return JsonResponse({"error": "Invalid username or password."}, status=401)
 
@@ -230,7 +263,7 @@ class SignupView(View):
             data = json.loads(request.body)
         except json.JSONDecodeError:
             return JsonResponse({"error": "Invalid JSON."}, status=400)
-            
+
         username = data.get("username", "").strip()
         password = data.get("password", "")
         confirm_password = data.get("confirm_password", "")
@@ -252,18 +285,25 @@ class SignupView(View):
             return JsonResponse({"errors": errors}, status=422)
 
         user = User.objects.create_user(username=username, password=password)
-        login(request, user)
-        return JsonResponse({"success": True, "username": user.username}, status=201)
+        # Create a token for the new user immediately
+        token, _ = Token.objects.get_or_create(user=user)
+        return JsonResponse({"success": True, "username": user.username, "token": token.key}, status=201)
+
 
 @method_decorator(csrf_exempt, name='dispatch')
 class LogoutView(View):
     def post(self, request):
-        logout(request)
+        user = get_user_from_request(request)
+        if user:
+            # Delete the token so it can no longer be used
+            Token.objects.filter(user=user).delete()
         return JsonResponse({"success": True})
+
 
 @method_decorator(csrf_exempt, name='dispatch')
 class AuthStatusView(View):
     def get(self, request):
-        if request.user.is_authenticated:
-            return JsonResponse({"authenticated": True, "username": request.user.username})
+        user = get_user_from_request(request)
+        if user:
+            return JsonResponse({"authenticated": True, "username": user.username})
         return JsonResponse({"authenticated": False})

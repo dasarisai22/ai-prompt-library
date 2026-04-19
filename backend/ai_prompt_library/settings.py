@@ -24,6 +24,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'rest_framework',
+    'rest_framework.authtoken',  # Token-based auth (avoids cross-origin cookie issues)
     'corsheaders',      # For Cross-Origin requests from Angular frontend
     'prompts',          # Our main app
 ]
